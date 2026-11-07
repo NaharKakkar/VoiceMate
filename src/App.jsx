@@ -3,11 +3,91 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 const today = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const money = n => new Intl.NumberFormat("en-IN", { style:"currency", currency:"INR", maximumFractionDigits:0 }).format(Number(n || 0));
 const blank = { expenses:[], tasks:[], calendar:[], notes:[], meetings:[] };
+const LOCAL_STORAGE_KEY = "voicemate-offline-data";
+const readLocalData = () => {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) return { ...blank };
+    const parsed = JSON.parse(raw);
+    return { ...blank, ...parsed, expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [], tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [], calendar: Array.isArray(parsed.calendar) ? parsed.calendar : [], notes: Array.isArray(parsed.notes) ? parsed.notes : [], meetings: Array.isArray(parsed.meetings) ? parsed.meetings : [] };
+  } catch {
+    return { ...blank };
+  }
+};
+const writeLocalData = (next) => {
+  try { localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(next)); } catch {}
+};
+const makeLocalId = (prefix = "local") => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 async function api(url, options={}) {
-  const r = await fetch(url, { headers:{ "Content-Type":"application/json", ...(options.headers||{}) }, ...options });
-  const data = await r.json().catch(()=>({}));
-  if (!r.ok) { const error = new Error(data.error || "Request failed"); error.status = r.status; error.data = data; throw error; }
-  return data;
+  const method = (options.method || "GET").toUpperCase();
+  try {
+    const r = await fetch(url, { headers:{ "Content-Type":"application/json", ...(options.headers||{}) }, ...options });
+    const text = await r.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    if (!r.ok) { const error = new Error(data.error || "Request failed"); error.status = r.status; error.data = data; throw error; }
+    return data;
+  } catch (error) {
+    if (typeof window === "undefined") throw error;
+    const local = readLocalData();
+    const path = String(url || "");
+    if (path.startsWith("/api/")) {
+      if (path === "/api/health") return { ok: true, storage: "local", geminiConfigured: false, gmailConfigured: false };
+      if (path === "/api/data") return local;
+      if (path === "/api/gmail/status") return { connected: false, configured: false };
+      if (method === "POST" || method === "PUT" || method === "DELETE") {
+        const match = path.match(/^\/api\/([^/?]+)(?:\/([^/?]+))?/);
+        const collection = match?.[1];
+        if (!collection) throw error;
+        if (collection === "command") {
+          return { intent: "unsupported", data: {}, spokenResponse: "The server is offline, but your app is still working in local mode." };
+        }
+        const body = options.body ? JSON.parse(options.body) : {};
+        if (method === "POST" && path.startsWith("/api/meetings/process")) {
+          const result = {
+            title: (body.transcript || "Offline meeting").trim().slice(0, 40) || "Offline meeting",
+            summary: "Saved locally while the server was offline.",
+            actionItems: [],
+            emailSubject: "Follow-up: Offline meeting",
+            emailBody: "This meeting was captured in offline mode. Please review and send when the server is back online."
+          };
+          const saved = { ...result, id: makeLocalId("meeting") };
+          const next = { ...local, meetings: [saved, ...local.meetings] };
+          writeLocalData(next);
+          return { ...saved, meetingId: saved.id };
+        }
+        if (method === "POST") {
+          const current = readLocalData();
+          const rows = Array.isArray(current[collection]) ? current[collection] : [];
+          const item = { ...body }; if (!item.id) item.id = makeLocalId(collection);
+          const next = { ...current, [collection]: [...rows, item] };
+          writeLocalData(next);
+          return item;
+        }
+        if (method === "PUT") {
+          const id = decodeURIComponent(match?.[2] || "");
+          const current = readLocalData();
+          const rows = Array.isArray(current[collection]) ? current[collection] : [];
+          const updateIndex = rows.findIndex(item => String(item.id) === String(id));
+          if (updateIndex === -1) throw error;
+          const updated = { ...rows[updateIndex], ...body, id: rows[updateIndex].id };
+          const nextRows = [...rows]; nextRows[updateIndex] = updated;
+          const next = { ...current, [collection]: nextRows };
+          writeLocalData(next);
+          return updated;
+        }
+        if (method === "DELETE") {
+          const id = decodeURIComponent(match?.[2] || "");
+          const current = readLocalData();
+          const rows = Array.isArray(current[collection]) ? current[collection] : [];
+          const next = { ...current, [collection]: rows.filter(item => String(item.id) !== String(id)) };
+          writeLocalData(next);
+          return { ok: true };
+        }
+      }
+    }
+    throw error;
+  }
 }
 function speak(text) {
   if ("speechSynthesis" in window) { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(text)); }
@@ -30,7 +110,7 @@ function App() {
     const d = await api("/api/data"); setData({ ...blank, ...d });
   };
   useEffect(() => {
-    (async()=>{ try { const h=await api("/api/health"); await refresh(); setStatus(`${h.storage} storage · ${h.geminiConfigured?"Gemini ready":"Gemini key missing"}`); const g=await api("/api/gmail/status"); setGmail(g); } catch(e){setStatus(e.message);} })();
+    (async()=>{ try { const h=await api("/api/health"); await refresh(); setStatus(h.storage === "local" ? "Offline mode · local storage" : `${h.storage} storage · ${h.geminiConfigured?"Gemini ready":"Gemini key missing"}`); const g=await api("/api/gmail/status"); setGmail(g); } catch(e){setStatus("Offline mode · local storage");} })();
     if (new URLSearchParams(location.search).get("gmail")==="connected") { history.replaceState({}, "", "/"); setToast("Gmail connected successfully."); }
   },[]);
   useEffect(() => {

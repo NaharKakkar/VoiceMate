@@ -146,12 +146,16 @@ app.get("/auth/google", (req, res) => {
   });
   res.redirect(authUrl);
 });
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
 app.get("/auth/google/callback", async (req, res) => {
   try {
     const { tokens } = await oauthClient().getToken(req.query.code);
     gmailTokens = tokens;
-    res.redirect("http://localhost:5173/?gmail=connected");
-  } catch (e) { res.status(400).send(`Gmail connection failed: ${e.message}`); }
+    res.redirect(`${FRONTEND_URL}/?gmail=connected`);
+  } catch (e) {
+    res.status(400).send(`Gmail connection failed: ${e.message}`);
+  }
 });
 function gmailApi() {
   if (!gmailTokens) throw new Error("Connect Gmail first.");
