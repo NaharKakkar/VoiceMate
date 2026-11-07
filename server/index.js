@@ -1,4 +1,5 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 import express from "express";
 import cors from "cors";
 import { google } from "googleapis";
@@ -6,17 +7,38 @@ import { initStore, all, save, remove, clear, storageMode } from "./store.js";
 import { calendarConflict, calendarConflicts } from "./calendar.js";
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:5173"
+}));
 app.use(express.json({ limit: "8mb" }));
 const PORT = process.env.PORT || 3000;
 
 const allowedCollections = new Set(["expenses", "tasks", "calendar", "notes", "meetings"]);
 const oauthConfigured = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+const redirectUri = () => process.env.GOOGLE_REDIRECT_URI || `http://localhost:${PORT}/auth/google/callback`;
 const oauthClient = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI || `http://localhost:${PORT}/auth/google/callback`
+  redirectUri()
 );
 let gmailTokens = null; // Demo-only in-memory token storage. Use encrypted per-user storage for production.
+const oauthStateStore = new Map();
+
+function createOAuthState() {
+  const state = crypto.randomBytes(32).toString("hex");
+  oauthStateStore.set(state, Date.now() + 10 * 60 * 1000);
+  return state;
+}
+
+function validateOAuthState(state) {
+  if (!state || typeof state !== "string") return false;
+  const expiresAt = oauthStateStore.get(state);
+  if (!expiresAt || Date.now() > expiresAt) {
+    oauthStateStore.delete(state);
+    return false;
+  }
+  oauthStateStore.delete(state);
+  return true;
+}
 
 async function gemini(prompt) {
   if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is missing. Add it to .env and restart the server.");
@@ -140,8 +162,13 @@ app.post("/api/summarize", async (req, res) => {
 // Gmail OAuth and API. Tokens are held in memory for this single-user hackathon demo only.
 app.get("/auth/google", (req, res) => {
   if (!oauthConfigured()) return res.status(400).send("Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env first.");
+  const state = createOAuthState();
   const authUrl = oauthClient().generateAuthUrl({
-    access_type: "offline", prompt: "consent",
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: true,
+    state,
+    redirect_uri: redirectUri(),
     scope: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
   });
   res.redirect(authUrl);
@@ -150,7 +177,17 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 app.get("/auth/google/callback", async (req, res) => {
   try {
-    const { tokens } = await oauthClient().getToken(req.query.code);
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    if (!validateOAuthState(state)) {
+      return res.status(400).send("Invalid or expired Google OAuth state. Please try connecting Gmail again.");
+    }
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    if (!code) return res.status(400).send("Google OAuth callback did not include a code.");
+
+    const { tokens } = await oauthClient().getToken({
+      code,
+      redirect_uri: redirectUri()
+    });
     gmailTokens = tokens;
     res.redirect(`${FRONTEND_URL}/?gmail=connected`);
   } catch (e) {

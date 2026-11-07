@@ -48,6 +48,8 @@ It combines speech recognition, AI-based intent understanding, and real-world ac
 
 6. Open `http://localhost:5173` in your browser.
 
+Legal pages are available at `http://localhost:5173/privacy` and `http://localhost:5173/terms`.
+
 ## Environment Variables
 
 Configure the following credentials in your `.env` file:
@@ -56,6 +58,12 @@ Configure the following credentials in your `.env` file:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI`
+
+For Gmail OAuth, the `GOOGLE_REDIRECT_URI` must exactly match the callback URL registered in your Google Cloud OAuth client. For a local dev setup, this is usually:
+
+`http://localhost:3000/auth/google/callback`
+
+The server also validates the OAuth `state` value during the callback to prevent CSRF / callback tampering.
 
 ## Note
 
