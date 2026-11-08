@@ -6,7 +6,9 @@ const today = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.
 const money = n => new Intl.NumberFormat("en-IN", { style:"currency", currency:"INR", maximumFractionDigits:0 }).format(Number(n || 0));
 const blank = { expenses:[], tasks:[], calendar:[], notes:[], meetings:[] };
 async function api(url, options={}) {
-  const r = await fetch(url, { headers:{ "Content-Type":"application/json", ...(options.headers||{}) }, ...options });
+  const base = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+  const resolvedUrl = /^https?:\/\//i.test(url) ? url : `${base}${url}`;
+  const r = await fetch(resolvedUrl, { headers:{ "Content-Type":"application/json", ...(options.headers||{}) }, ...options });
   const data = await r.json().catch(()=>({}));
   if (!r.ok) { const error = new Error(data.error || "Request failed"); error.status = r.status; error.data = data; throw error; }
   return data;
