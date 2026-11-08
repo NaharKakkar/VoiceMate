@@ -7,18 +7,34 @@ import { initStore, all, save, remove, clear, storageMode } from "./store.js";
 import { calendarConflict, calendarConflicts } from "./calendar.js";
 
 const app = express();
+const FRONTEND_URL = process.env.FRONTEND_URL || process.env.PUBLIC_URL || "http://localhost:5173";
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:5173"
+  origin: FRONTEND_URL
 }));
 app.use(express.json({ limit: "8mb" }));
 const PORT = process.env.PORT || 3000;
 
 const allowedCollections = new Set(["expenses", "tasks", "calendar", "notes", "meetings"]);
 const oauthConfigured = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-const redirectUri = () => process.env.GOOGLE_REDIRECT_URI || `http://localhost:${PORT}/auth/google/callback`;
-const oauthClient = () => new google.auth.OAuth2(
+const normalizeOrigin = (value) => (value || "").trim().replace(/\/+$/, "");
+const getBaseUrl = (req = null) => {
+  if (process.env.PUBLIC_BASE_URL || process.env.APP_URL || process.env.APP_BASE_URL) {
+    return normalizeOrigin(process.env.PUBLIC_BASE_URL || process.env.APP_URL || process.env.APP_BASE_URL);
+  }
+  if (req) {
+    const forwardedProto = Array.isArray(req.headers["x-forwarded-proto"]) ? req.headers["x-forwarded-proto"][0] : req.headers["x-forwarded-proto"] || req.protocol || "http";
+    const forwardedHost = Array.isArray(req.headers["x-forwarded-host"]) ? req.headers["x-forwarded-host"][0] : req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`;
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+  return `http://localhost:${PORT}`;
+};
+const redirectUri = (req = null) => {
+  if (process.env.GOOGLE_REDIRECT_URI) return normalizeOrigin(process.env.GOOGLE_REDIRECT_URI);
+  return `${getBaseUrl(req)}/auth/google/callback`;
+};
+const oauthClient = (req = null) => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET,
-  redirectUri()
+  redirectUri(req)
 );
 let gmailTokens = null; // Demo-only in-memory token storage. Use encrypted per-user storage for production.
 const oauthStateStore = new Map();
@@ -163,17 +179,16 @@ app.post("/api/summarize", async (req, res) => {
 app.get("/auth/google", (req, res) => {
   if (!oauthConfigured()) return res.status(400).send("Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env first.");
   const state = createOAuthState();
-  const authUrl = oauthClient().generateAuthUrl({
+  const authUrl = oauthClient(req).generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: true,
     state,
-    redirect_uri: redirectUri(),
+    redirect_uri: redirectUri(req),
     scope: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
   });
   res.redirect(authUrl);
 });
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 app.get("/auth/google/callback", async (req, res) => {
   try {
@@ -184,12 +199,13 @@ app.get("/auth/google/callback", async (req, res) => {
     const code = typeof req.query.code === "string" ? req.query.code : "";
     if (!code) return res.status(400).send("Google OAuth callback did not include a code.");
 
-    const { tokens } = await oauthClient().getToken({
+    const { tokens } = await oauthClient(req).getToken({
       code,
-      redirect_uri: redirectUri()
+      redirect_uri: redirectUri(req)
     });
     gmailTokens = tokens;
-    res.redirect(`${FRONTEND_URL}/?gmail=connected`);
+    const frontendUrl = process.env.FRONTEND_URL || process.env.PUBLIC_URL || getBaseUrl(req);
+    res.redirect(`${normalizeOrigin(frontendUrl)}/?gmail=connected`);
   } catch (e) {
     res.status(400).send(`Gmail connection failed: ${e.message}`);
   }

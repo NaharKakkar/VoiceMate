@@ -58,10 +58,14 @@ Configure the following credentials in your `.env` file:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI`
+- `FRONTEND_URL` (optional; defaults to the current frontend origin)
+- `PUBLIC_BASE_URL` / `APP_URL` (optional; used when the app is deployed behind Render, Vercel, or another reverse proxy)
 
-For Gmail OAuth, the `GOOGLE_REDIRECT_URI` must exactly match the callback URL registered in your Google Cloud OAuth client. For a local dev setup, this is usually:
+For Gmail OAuth, the `GOOGLE_REDIRECT_URI` must exactly match the callback URL registered in your Google Cloud OAuth client. In production, use your deployed HTTPS callback such as:
 
-`http://localhost:3000/auth/google/callback`
+`https://your-app.onrender.com/auth/google/callback`
+
+For local development, the app will fall back to the current request host and default to `http://localhost:3000/auth/google/callback` when no deployment URL is configured.
 
 The server also validates the OAuth `state` value during the callback to prevent CSRF / callback tampering.
 
